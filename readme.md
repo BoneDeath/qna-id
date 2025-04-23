@@ -4,7 +4,7 @@ this qna just working with indonesian content and question
 how to work:
 ```
 python -m venv env
-source env/bin/activate  # atau `env\Scripts\activate` di Windows
+env\Scripts\activate
 pip install -r requirements.txt
 python bot.py
 ```
