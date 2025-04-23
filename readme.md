@@ -1,4 +1,4 @@
-AI machine learning build with  python using model huggingface  mrizalf7/indobert-qa-finetuned-small-squad-indonesian-rizal indonesia
+AI machine learning build with pytorch and nummpy using model huggingface  mrizalf7/indobert-qa-finetuned-small-squad-indonesian-rizal indonesia
 this qna just working with indonesian content and question
 
 how to work:
