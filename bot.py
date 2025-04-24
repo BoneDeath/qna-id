@@ -1,66 +1,18 @@
 from transformers import BertTokenizer, BertForQuestionAnswering
 import torch
+import textwrap
 
 model_name = "mrizalf7/indobert-qa-finetuned-small-squad-indonesian-rizal"
 
 tokenizer = BertTokenizer.from_pretrained(model_name)
 model = BertForQuestionAnswering.from_pretrained(model_name)
 
-# Fungsi memotong konteks panjang jadi potongan kecil (chunk)
-def chunk_text(text, max_tokens=450, stride=100):
-    tokens = tokenizer.encode(text, add_special_tokens=False)
-    chunks = []
-    for i in range(0, len(tokens), max_tokens - stride):
-        chunk = tokens[i:i + max_tokens]
-        chunks.append(chunk)
-        if i + max_tokens >= len(tokens):
-            break
-    return chunks
+# Fungsi untuk bagi dokumen panjang jadi potongan
+def chunk_context(text, max_length=500):
+    return textwrap.wrap(text, max_length)
 
-# Fungsi menjawab dari banyak chunk dan ambil jawaban terbaik
-def answer_question(question, context):
-    chunks = chunk_text(context)
-    best_answer = ""
-    best_score = float("-inf")
-
-    for chunk in chunks:
-        inputs = tokenizer.encode_plus(
-            question,
-            chunk,
-            return_tensors="pt",
-            max_length=512,
-            truncation=True,
-            padding="max_length",
-            return_token_type_ids=True,
-            return_attention_mask=True  # ✅ penting!
-        )
-        input_ids = inputs["input_ids"]
-        token_type_ids = inputs["token_type_ids"]
-
-        with torch.no_grad():
-            outputs = model(
-                input_ids=inputs["input_ids"],
-                token_type_ids=inputs["token_type_ids"],
-                attention_mask=inputs["attention_mask"]  # ✅ penting!
-            )
-
-            start_logits = outputs.start_logits
-            end_logits = outputs.end_logits
-
-        start_idx = torch.argmax(start_logits)
-        end_idx = torch.argmax(end_logits) + 1
-
-        score = start_logits[0][start_idx] + end_logits[0][end_idx - 1]
-
-        if start_idx < end_idx and score > best_score:
-            best_score = score
-            answer_tokens = input_ids[0][start_idx:end_idx]
-            best_answer = tokenizer.decode(answer_tokens, skip_special_tokens=True)
-
-    return best_answer.strip()
-
-# ✅ Contoh konteks sejarah
-context = """
+# Load konteks panjang dari file atau langsung dari string
+context =  """
 Indonesia, dengan nama resmi Republik Indonesia,[a] adalah sebuah negara kepulauan di Asia Tenggara yang dilintasi garis khatulistiwa dan berada di antara daratan benua Asia dan Oseania sehingga dikenal sebagai negara lintas benua, serta antara Samudra Pasifik dan Samudra Hindia.
 
 Indonesia merupakan negara terluas ke-14 sekaligus negara kepulauan terbesar di dunia dengan luas wilayah sebesar 1.904.569 km²,[10] serta negara dengan pulau terbanyak ke-6 di dunia, dengan jumlah 17.504 pulau.[11] Nama alternatif yang dipakai untuk kepulauan Indonesia disebut Nusantara.[12] Selain itu, Indonesia juga menjadi negara berpenduduk terbanyak ke-4 di dunia dengan penduduk mencapai 275.344.166 jiwa pada tahun 2022.[13] Indonesia adalah negara multiras, multietnis, dan multikultural di dunia, seperti halnya Amerika Serikat.[14] Indonesia berbatasan dengan sejumlah negara di Asia Tenggara dan Oseania. Indonesia berbatasan di wilayah darat dengan Malaysia di Pulau Kalimantan dan Sebatik, dengan Papua Nugini di Pulau Papua, dan dengan Timor Leste di Pulau Timor. Negara yang hanya berbatasan laut dengan Indonesia adalah Singapura, Filipina, Australia, Thailand, Vietnam, Palau, dan wilayah persatuan Kepulauan Andaman dan Nikobar, India.
@@ -862,10 +814,55 @@ Artikel utama: Internet di Indonesia
 Pada tahun 2007, dilaporkan bahwa 20 juta penduduk Indonesia menjadi pengguna internet.[469] Kemudian pada tahun 2014, jumlah pengguna internet bertambah pesat menjadi 83,7 juta orang atau terbanyak keenam di dunia.[470] Pada tahun 2019, yaitu tahun sebelum pandemi Covid-19 berlangsung, diperkirakan jumlah pengguna internet di Indonesia adalah 175 juta jiwa. Sementara pada tahun 2022, pengguna internet di Indonesia telah menyentuh angka 210 juta jiwa, yaitu sekitar 77% dari jumlah penduduk Indonesia.[471]
 """
 
-# Loop tanya-jawab
+# 1. Bagi konteks menjadi chunk
+chunks = chunk_context(context)
+
+# 2. Pre-tokenize semua chunk agar lebih cepat saat tanya
+def prepare_inputs_for_chunks(question, chunks):
+    inputs = []
+    for chunk in chunks:
+        input = tokenizer.encode_plus(
+            question,
+            chunk,
+            return_tensors="pt",
+            truncation=True,
+            padding="max_length",
+            max_length=512
+        )
+        inputs.append((input, chunk))
+    return inputs
+
+# 3. Jawab berdasarkan chunk paling relevan
+def answer_question(question, chunks):
+    best_answer = ""
+    max_score = float("-inf")
+
+    prepared_inputs = prepare_inputs_for_chunks(question, chunks)
+
+    for inputs, chunk in prepared_inputs:
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        start_logits = outputs.start_logits
+        end_logits = outputs.end_logits
+
+        answer_start = torch.argmax(start_logits)
+        answer_end = torch.argmax(end_logits) + 1
+
+        score = start_logits[0, answer_start] + end_logits[0, answer_end - 1]
+
+        if score > max_score:
+            max_score = score
+            input_ids = inputs["input_ids"][0]
+            answer = tokenizer.convert_tokens_to_string(tokenizer.convert_ids_to_tokens(input_ids[answer_start:answer_end]))
+            best_answer = answer
+
+    return best_answer.strip()
+
+# Loop interaktif
 while True:
     question = input("\nTanya: ")
     if question.lower() in ['exit', 'keluar']:
         break
-    answer = answer_question(question, context)
-    print("Jawab:", answer if answer else "Maaf, saya tidak tahu jawabannya.")
+    answer = answer_question(question, chunks)
+    print("Jawab:", answer)
